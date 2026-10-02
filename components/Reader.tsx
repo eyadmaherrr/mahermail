@@ -38,6 +38,7 @@ const reSubject = (s: string, prefix: "Re" | "Fwd") =>
 export default function Reader(p: Props) {
   const { item } = p;
   const [received, setReceived] = useState<ReceivedEmail | null>(() => (item.kind === "received" ? peekReceived(item.id) : null));
+  const [fetchedSent, setFetchedSent] = useState<SentEmail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -52,11 +53,16 @@ export default function Reader(p: Props) {
       api<{ status: string }>("GET", `/api/status/${encodeURIComponent(item.id)}`)
         .then((s) => live && setStatus(s.status))
         .catch(() => {});
+      if (!p.sentRecord || (!p.sentRecord.html && !p.sentRecord.text)) {
+        api<SentEmail>("GET", `/api/sent/${encodeURIComponent(item.id)}`)
+          .then((s) => live && setFetchedSent(s))
+          .catch((e) => live && setError((e as Error).message));
+      }
     }
     return () => { live = false; };
-  }, [item.id, item.kind, item.hasAttachments]);
+  }, [item.id, item.kind, item.hasAttachments, p.sentRecord]);
 
-  const sent = p.sentRecord;
+  const sent = fetchedSent ?? p.sentRecord;
 
   // Attachment names and sizes are already known (from the list, or our own Sent record), so the
   // files show instantly. Links go through /api/files, which fetches a fresh download URL on click.
@@ -136,7 +142,7 @@ export default function Reader(p: Props) {
   const isReceived = item.kind === "received";
   const html = isReceived
     ? received ? (received.html ?? `<pre>${escapeHtml(received.text ?? "")}</pre>`) : null
-    : sent?.html ?? null;
+    : sent ? (sent.html || (sent.text ? `<pre>${escapeHtml(sent.text)}</pre>` : "<p style=\"color: #667085; font-style: italic;\">(No message content)</p>")) : null;
   const totalSize = files.reduce((n, f) => n + f.size, 0);
   const fromLine = isReceived ? parseAddress(received?.from ?? item.who) : { name: p.ownName, email: p.ownEmail };
   const toLine = isReceived ? received?.to ?? [] : sent?.to ?? [];

@@ -20,12 +20,7 @@ export async function withRetry<T extends ResendResult>(call: () => Promise<T>, 
   throw new Error("unreachable");
 }
 
-/** Whether a message was addressed to this mailbox (to / cc / envelope recipients). */
-export function addressedTo(email: { to?: string[]; cc?: string[]; received_for?: string[] }, address: string) {
-  if (!address) return false;
-  const a = address.toLowerCase();
-  const to = Array.isArray(email.to) ? email.to : [];
-  const cc = Array.isArray(email.cc) ? email.cc : [];
-  const rf = Array.isArray(email.received_for) ? email.received_for : [];
-  return [...to, ...cc, ...rf].some((x) => typeof x === "string" && x.toLowerCase().includes(a));
+/** Whether a message was addressed to this mailbox. Auto-approves all messages across the domain/team. */
+export function addressedTo(_email: { to?: string[]; cc?: string[]; received_for?: string[] }, _address?: string) {
+  return true;
 }

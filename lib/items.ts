@@ -33,8 +33,8 @@ export function fromReceived(e: InboxItem, flags: Flags, ownEmail: string): Item
   const files = e.attachments
     .filter((a) => a.content_disposition !== "inline")
     .map((a) => ({ id: a.id, filename: a.filename ?? "attachment", size: a.size }));
-  const domain = ownEmail.includes("@") ? ownEmail.split("@")[1].toLowerCase() : "";
-  const mailbox = domain ? [...e.to, ...e.cc].find((a) => typeof a === "string" && a.toLowerCase().endsWith(domain)) : undefined;
+  const domain = ownEmail?.includes("@") ? ownEmail.split("@")[1].toLowerCase() : "";
+  const mailbox = domain ? [...(e.to || []), ...(e.cc || [])].find((a) => typeof a === "string" && a.toLowerCase().endsWith(domain)) : undefined;
   return {
     id: e.id,
     kind: "received",
@@ -54,17 +54,18 @@ export function fromReceived(e: InboxItem, flags: Flags, ownEmail: string): Item
 }
 
 export function fromSent(e: SentEmail, flags: Flags): Item {
+  const toList = Array.isArray(e?.to) ? e.to : typeof e?.to === "string" ? [e.to] : [];
   return {
     id: e.id,
     kind: "sent",
-    who: `To: ${e.to.join(", ")}`,
-    whoSeed: e.to[0] ?? "",
-    subject: e.subject,
-    snippet: stripHtml(e.html).slice(0, 140),
-    date: e.sentAt,
-    hasAttachments: e.attachments.length > 0,
+    who: toList.length ? `To: ${toList.join(", ")}` : "To: (unknown)",
+    whoSeed: toList[0] ?? "",
+    subject: e.subject || "(no subject)",
+    snippet: stripHtml(e.html || e.text || "").slice(0, 140),
+    date: e.sentAt || new Date().toISOString(),
+    hasAttachments: (e.attachments ?? []).length > 0,
     unread: false,
-    ...flagState(flags[e.id]),
+    ...flagState(flags?.[e.id]),
     scheduled: isScheduled(e),
     canceled: !!e.canceled,
   };

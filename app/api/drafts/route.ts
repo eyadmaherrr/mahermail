@@ -2,6 +2,8 @@ import { userDb } from "@/lib/db";
 import { authed } from "@/lib/session";
 import type { Draft } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export const GET = authed(async (_req, user) => Response.json(await userDb(user).drafts.list()));
 
 export const POST = authed(async (request, user) => {

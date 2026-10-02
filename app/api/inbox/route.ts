@@ -2,6 +2,8 @@ import { addressedTo, resend, withRetry } from "@/lib/config";
 import { authed } from "@/lib/session";
 import type { InboxItem, InboxPage } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 const PAGE = 50;
 const WANT = 25;     // the domain's mail is shared, so keep paging until this mailbox has this many
 const MAX_PAGES = 6; // …but never walk the whole history in one request
@@ -18,22 +20,21 @@ async function fetchPage(after?: string): Promise<RawPage> {
     resend().emails.receiving.list(after ? { limit: PAGE, after } : { limit: PAGE }),
   );
   if (error || !data) throw new Error(error?.message ?? "Couldn't load inbox");
-  const list = Array.isArray(data.data) ? data.data : [];
   const page: RawPage = {
-    rows: list.map((e) => ({
+    rows: data.data.map((e) => ({
       id: e.id,
-      from: e.from || "",
-      to: Array.isArray(e.to) ? e.to : [],
-      cc: Array.isArray(e.cc) ? e.cc : [],
-      subject: e.subject || "",
-      created_at: e.created_at || new Date().toISOString(),
-      received_for: Array.isArray(e.received_for) ? e.received_for : undefined,
+      from: e.from,
+      to: e.to ?? [],
+      cc: e.cc ?? [],
+      subject: e.subject,
+      created_at: e.created_at,
+      received_for: e.received_for ?? undefined,
       attachments: (e.attachments ?? []).map((a) => ({
         id: a.id, filename: a.filename, size: a.size, content_disposition: a.content_disposition,
       })),
     })),
-    hasMore: !!data.has_more && list.length > 0,
-    last: list.at(-1)?.id,
+    hasMore: data.has_more,
+    last: data.data.at(-1)?.id,
   };
   if (after) olderPages.set(after, { at: Date.now(), page });
   return page;
@@ -49,9 +50,9 @@ export const GET = authed(async (request, user) => {
     for (let i = 0; i < MAX_PAGES && hasMore; i++) {
       const page = await fetchPage(after);
       out.push(...page.rows.filter((e) => addressedTo(e, user.email)));
-      hasMore = page.hasMore && !!page.last && page.rows.length > 0;
+      hasMore = page.hasMore;
       after = page.last;
-      if (out.length >= WANT || !hasMore) break;
+      if (out.length >= WANT) break;
     }
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 502 });

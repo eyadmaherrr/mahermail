@@ -2,6 +2,8 @@ import { userDb } from "@/lib/db";
 import { authed } from "@/lib/session";
 import { DEFAULT_SETTINGS, type Settings } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export const GET = authed(async (_req, user) => Response.json(await userDb(user).settings.get()));
 
 export const PUT = authed(async (request, user) => {

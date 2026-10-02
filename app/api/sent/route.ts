@@ -3,31 +3,44 @@ import { userDb } from "@/lib/db";
 import { authed } from "@/lib/session";
 import type { SentEmail } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 export const GET = authed(async (_req, user) => {
   const local = await userDb(user).sent.list();
-  if (local.length > 0) return Response.json(local);
 
+  // Fetch all sent messages from Resend so sent mail is never lost on serverless / Vercel
+  let remoteEmails: SentEmail[] = [];
   try {
     const { data } = await resend().emails.list();
     if (data?.data && Array.isArray(data.data)) {
-      const fromResend = data.data
-        .filter((e) => e.from && e.from.toLowerCase().includes(user.email.toLowerCase()))
-        .map((e) => ({
-          id: e.id,
-          to: Array.isArray(e.to) ? e.to : [e.to],
-          cc: [],
-          bcc: [],
-          subject: e.subject || "(no subject)",
-          html: "",
-          text: "",
-          attachments: [],
-          scheduledAt: null,
-          sentAt: e.created_at || new Date().toISOString(),
-        } as SentEmail));
-      if (fromResend.length > 0) return Response.json(fromResend);
+      remoteEmails = data.data.map((e) => ({
+        id: e.id,
+        to: Array.isArray(e.to) ? e.to : typeof e.to === "string" ? [e.to] : [],
+        cc: Array.isArray(e.cc) ? e.cc : typeof e.cc === "string" ? [e.cc] : [],
+        bcc: Array.isArray(e.bcc) ? e.bcc : typeof e.bcc === "string" ? [e.bcc] : [],
+        subject: e.subject || "(no subject)",
+        html: "",
+        text: "",
+        attachments: [],
+        scheduledAt: e.scheduled_at ?? null,
+        sentAt: e.created_at || new Date().toISOString(),
+      }));
     }
-  } catch {
-    // Ignore fallback failure
+  } catch (err) {
+    console.warn("[sent] Could not fetch remote sent emails:", (err as Error).message);
   }
-  return Response.json(local);
+
+  // Merge local and remote: local takes precedence because it includes attachments and full body
+  const localMap = new Map(local.map((item) => [item.id, item]));
+  const merged: SentEmail[] = [...local];
+  for (const remote of remoteEmails) {
+    if (!localMap.has(remote.id)) {
+      merged.push(remote);
+    }
+  }
+
+  // Sort newest first
+  merged.sort((a, b) => +new Date(b.sentAt) - +new Date(a.sentAt));
+
+  return Response.json(merged);
 });
