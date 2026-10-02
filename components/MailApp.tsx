@@ -7,7 +7,7 @@ import Icon from "./Icon";
 import MessageList, { VIEW_META, type SelectionAction } from "./MessageList";
 import Reader, { type ReaderActions } from "./Reader";
 import SettingsSheet from "./SettingsSheet";
-import { api, fmtDate, parseAddress } from "@/lib/client";
+import { api, fmtDate, parseAddress, prefs } from "@/lib/client";
 import type { Account } from "@/lib/accounts";
 import { peekReceived, prefetch } from "@/lib/prefetch";
 import { byDateDesc, fromDraft, fromMeta, fromReceived, fromSent, metaOf, type Item, type View } from "@/lib/items";
@@ -18,13 +18,22 @@ type Toast = { text: string; action?: { label: string; run: () => void }; on: bo
 
 export default function MailApp({ account, initialSettings }: { account: Account; initialSettings: Settings }) {
   const ownEmail = account.email;
+  const FLAGS_KEY = `mm_flags_${account.id}`;
+  const SETTINGS_KEY = `mm_settings_${account.id}`;
+  const DRAFTS_KEY = `mm_drafts_${account.id}`;
+  const VIEW_KEY = `mm_view_${account.id}`;
+  const LAST_OPENED_KEY = `mm_last_opened_${account.id}`;
+
   // merge over defaults so settings added in newer versions always start defined
-  const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...initialSettings }));
-  const [view, setView] = useState<View>("inbox");
+  const [settings, setSettings] = useState<Settings>(() => ({
+    ...DEFAULT_SETTINGS,
+    ...prefs.get<Settings>(SETTINGS_KEY, initialSettings),
+  }));
+  const [view, setView] = useState<View>(() => prefs.get<View>(VIEW_KEY, "inbox"));
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // the message you just read stays highlighted in the list after going back
-  const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
+  const [lastOpenedId, setLastOpenedId] = useState<string | null>(() => prefs.get<string | null>(LAST_OPENED_KEY, null));
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -32,9 +41,30 @@ export default function MailApp({ account, initialSettings }: { account: Account
   const [inboxNext, setInboxNext] = useState<string | null>(null);
   const [inboxState, setInboxState] = useState<{ loading: boolean; more: boolean; error: string | null }>({ loading: true, more: false, error: null });
   const [sent, setSent] = useState<SentEmail[]>([]);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [flags, setFlags] = useState<Flags>({});
+  const [drafts, setDrafts] = useState<Draft[]>(() => prefs.get<Draft[]>(DRAFTS_KEY, []));
+  const [flags, setFlags] = useState<Flags>(() => prefs.get<Flags>(FLAGS_KEY, {}));
   const [localLoaded, setLocalLoaded] = useState(false);
+
+  // Keep localStorage continuously synced as a resilient offline/client-side cache
+  useEffect(() => {
+    prefs.set(FLAGS_KEY, flags);
+  }, [flags, FLAGS_KEY]);
+
+  useEffect(() => {
+    prefs.set(SETTINGS_KEY, settings);
+  }, [settings, SETTINGS_KEY]);
+
+  useEffect(() => {
+    prefs.set(DRAFTS_KEY, drafts);
+  }, [drafts, DRAFTS_KEY]);
+
+  useEffect(() => {
+    prefs.set(VIEW_KEY, view);
+  }, [view, VIEW_KEY]);
+
+  useEffect(() => {
+    if (lastOpenedId) prefs.set(LAST_OPENED_KEY, lastOpenedId);
+  }, [lastOpenedId, LAST_OPENED_KEY]);
 
   const [compose, setCompose] = useState<{ key: number; seed: ComposeSeed } | null>(null);
   const [toast, setToast] = useState<Toast>({ text: "", on: false });
@@ -54,9 +84,13 @@ export default function MailApp({ account, initialSettings }: { account: Account
 
   /* ---------------- settings ---------------- */
   const updateSettings = useCallback((patch: Partial<Settings>) => {
-    setSettings((s) => ({ ...s, ...patch }));
+    setSettings((s) => {
+      const next = { ...s, ...patch };
+      prefs.set(SETTINGS_KEY, next);
+      return next;
+    });
     api<Settings>("PUT", "/api/settings", patch).catch((e) => notify(`Couldn’t save settings: ${(e as Error).message}`));
-  }, [notify]);
+  }, [notify, SETTINGS_KEY]);
 
   /* ---------------- data ---------------- */
   const loadLocal = useCallback(async () => {
@@ -66,13 +100,26 @@ export default function MailApp({ account, initialSettings }: { account: Account
         api<Draft[]>("GET", "/api/drafts"),
         api<Flags>("GET", "/api/flags"),
       ]);
-      setSent(s); setDrafts(d); setFlags(f);
+      setSent(s);
+      setDrafts((curr) => {
+        const byId = new Map(curr.map((x) => [x.id, x]));
+        for (const draft of d) byId.set(draft.id, draft);
+        const merged = [...byId.values()];
+        prefs.set(DRAFTS_KEY, merged);
+        return merged;
+      });
+      setFlags((curr) => {
+        // Merge server flags with local flags so no client-side hidden/read state is ever lost
+        const merged = { ...curr, ...f };
+        prefs.set(FLAGS_KEY, merged);
+        return merged;
+      });
     } catch (e) {
       notify(`Couldn’t load your mail: ${(e as Error).message}`);
     } finally {
       setLocalLoaded(true);
     }
-  }, [notify]);
+  }, [notify, DRAFTS_KEY, FLAGS_KEY]);
 
   /** Fetch the newest page. On refresh, merge in anything new and announce it. */
   const loadInbox = useCallback(async (reset: boolean) => {
@@ -220,14 +267,23 @@ export default function MailApp({ account, initialSettings }: { account: Account
   const patchFlag = useCallback(async (item: Item, patch: Flags[string]) => {
     const to = item.kind === "sent" ? sentById.get(item.id)?.to ?? [] : [];
     const body = { id: item.id, ...patch, meta: metaOf(item, to) };
-    setFlags((f) => ({ ...f, [item.id]: { ...f[item.id], ...body } })); // optimistic
+    setFlags((f) => {
+      const next = { ...f, [item.id]: { ...f[item.id], ...body } };
+      prefs.set(FLAGS_KEY, next);
+      return next;
+    }); // optimistic + instant localStorage save
     try {
-      setFlags(await api<Flags>("PATCH", "/api/flags", body));
+      const serverFlags = await api<Flags>("PATCH", "/api/flags", body);
+      setFlags((f) => {
+        const merged = { ...f, ...serverFlags };
+        prefs.set(FLAGS_KEY, merged);
+        return merged;
+      });
     } catch (e) {
       notify(`Couldn’t update: ${(e as Error).message}`);
       loadLocal();
     }
-  }, [sentById, notify, loadLocal]);
+  }, [sentById, notify, loadLocal, FLAGS_KEY]);
 
   const toggle = (item: Item, key: "starred" | "important") => {
     const on = !item[key];
@@ -243,13 +299,27 @@ export default function MailApp({ account, initialSettings }: { account: Account
     }
     setSelectedId(item.id);
     setLastOpenedId(item.id);
+    prefs.set(LAST_OPENED_KEY, item.id);
     if (item.unread && settings.markReadOnOpen) patchFlag(item, { read: true });
   };
 
   const markAllRead = async () => {
     const ids = receivedItems.filter((i) => i.unread && !i.hidden).map((i) => i.id);
-    setFlags((f) => Object.fromEntries([...Object.entries(f), ...ids.map((id) => [id, { ...f[id], read: true }])]));
-    try { setFlags(await api<Flags>("PATCH", "/api/flags", { readIds: ids })); } catch { loadLocal(); }
+    setFlags((f) => {
+      const next = Object.fromEntries([...Object.entries(f), ...ids.map((id) => [id, { ...f[id], read: true }])]);
+      prefs.set(FLAGS_KEY, next);
+      return next;
+    });
+    try {
+      const serverFlags = await api<Flags>("PATCH", "/api/flags", { readIds: ids });
+      setFlags((f) => {
+        const merged = { ...f, ...serverFlags };
+        prefs.set(FLAGS_KEY, merged);
+        return merged;
+      });
+    } catch {
+      loadLocal();
+    }
     notify(`Marked ${ids.length} as read`);
   };
 
@@ -304,10 +374,16 @@ export default function MailApp({ account, initialSettings }: { account: Account
     setFlags((f) => {
       const next = { ...f };
       for (const { id, ...rest } of body.items) next[id] = { ...next[id], ...rest };
+      prefs.set(FLAGS_KEY, next);
       return next;
     });
     try {
-      setFlags(await api<Flags>("PATCH", "/api/flags", body));
+      const serverFlags = await api<Flags>("PATCH", "/api/flags", body);
+      setFlags((f) => {
+        const merged = { ...f, ...serverFlags };
+        prefs.set(FLAGS_KEY, merged);
+        return merged;
+      });
     } catch (e) {
       notify(`Couldn’t update: ${(e as Error).message}`);
       loadLocal();

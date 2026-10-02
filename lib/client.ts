@@ -109,6 +109,7 @@ export const isScheduled = (e: { scheduledAt?: string | null; canceled?: boolean
 export const prefs = {
   get<T>(key: string, fallback: T): T {
     try {
+      if (typeof window === "undefined") return fallback;
       const v = localStorage.getItem(key);
       return v === null ? fallback : (JSON.parse(v) as T);
     } catch {
@@ -117,6 +118,7 @@ export const prefs = {
   },
   set(key: string, value: unknown) {
     try {
+      if (typeof window === "undefined") return;
       localStorage.setItem(key, JSON.stringify(value));
     } catch {}
   },

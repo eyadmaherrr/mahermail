@@ -9,32 +9,11 @@ export const GET = authed(async (_req, user, ctx: RouteContext<"/api/sent/[id]">
   const { id } = await ctx.params;
   const list = await userDb(user).sent.list();
   const local = list.find((e) => e.id === id);
+  if (local && (local.html || local.text)) return Response.json(local);
 
   try {
     const { data } = await resend().emails.get(id);
     if (data) {
-      // Privacy check: only the sender mailbox may access this sent email
-      if (data.from && !data.from.toLowerCase().includes(user.email.toLowerCase())) {
-        return Response.json({ error: "Message not found" }, { status: 404 });
-      }
-
-      // Fetch attachments from Resend if not present locally
-      let attachments = local?.attachments || [];
-      if (!attachments.length) {
-        try {
-          const attRes = await resend().emails.attachments.list({ emailId: id });
-          if (attRes.data?.data && Array.isArray(attRes.data.data)) {
-            attachments = attRes.data.data.map((a) => ({
-              id: a.id,
-              filename: a.filename || "attachment",
-              size: a.size || 0,
-            }));
-          }
-        } catch (attErr) {
-          console.warn("[sent/[id]] Could not list attachments:", (attErr as Error).message);
-        }
-      }
-
       const email: SentEmail = {
         id: data.id,
         to: Array.isArray(data.to) ? data.to : typeof data.to === "string" ? [data.to] : [],
@@ -43,16 +22,14 @@ export const GET = authed(async (_req, user, ctx: RouteContext<"/api/sent/[id]">
         subject: data.subject || "(no subject)",
         html: data.html || (data.text ? `<pre>${data.text}</pre>` : ""),
         text: data.text || "",
-        attachments,
+        attachments: local?.attachments || [],
         scheduledAt: data.scheduled_at ?? null,
         sentAt: data.created_at || new Date().toISOString(),
       };
-
-      // Cache locally
+      // Cache locally if possible
       try {
         await userDb(user).sent.upsert(email);
       } catch {}
-
       return Response.json(email);
     }
   } catch (err) {
