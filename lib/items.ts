@@ -29,7 +29,7 @@ export type Item = {
 const flagState = (f: Flag | undefined) => ({ starred: !!f?.starred, important: !!f?.important, hidden: !!f?.hidden });
 
 export function fromReceived(e: InboxItem, flags: Flags, ownEmail: string): Item {
-  const f = flags[e.id];
+  const f = flags?.[e.id];
   const files = e.attachments
     .filter((a) => a.content_disposition !== "inline")
     .map((a) => ({ id: a.id, filename: a.filename ?? "attachment", size: a.size }));

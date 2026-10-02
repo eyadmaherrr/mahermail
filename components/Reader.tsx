@@ -53,7 +53,7 @@ export default function Reader(p: Props) {
       api<{ status: string }>("GET", `/api/status/${encodeURIComponent(item.id)}`)
         .then((s) => live && setStatus(s.status))
         .catch(() => {});
-      if (!p.sentRecord || (!p.sentRecord.html && !p.sentRecord.text)) {
+      if (!p.sentRecord || (!p.sentRecord.html && !p.sentRecord.text) || !p.sentRecord.attachments || p.sentRecord.attachments.length === 0) {
         api<SentEmail>("GET", `/api/sent/${encodeURIComponent(item.id)}`)
           .then((s) => live && setFetchedSent(s))
           .catch((e) => live && setError((e as Error).message));
@@ -72,14 +72,19 @@ export default function Reader(p: Props) {
       ? (received?.attachments.filter((a) => a.content_disposition !== "inline")
           .map((a) => ({ id: a.id, filename: a.filename ?? "attachment", size: a.size })) ?? item.files ?? [])
           .map((a) => ({ ...a, href: `/api/files/received/${enc(item.id)}?id=${enc(a.id)}` }))
-      : (sent?.attachments ?? []).map((a, i) => ({
-          id: `${i}-${a.filename}`, filename: a.filename, size: a.size,
-          href: `/api/files/sent/${enc(item.id)}?name=${enc(a.filename)}`,
-        }));
+      : (sent?.attachments ?? []).map((a, i) => {
+          const aid = (a as { id?: string }).id;
+          return {
+            id: aid || `${i}-${a.filename}`,
+            filename: a.filename,
+            size: a.size,
+            href: `/api/files/sent/${enc(item.id)}?name=${enc(a.filename)}${aid ? `&id=${enc(aid)}` : ""}`,
+          };
+        });
   const remote: RemoteAttachment[] = files.map((f) => ({
     kind: item.kind === "received" ? "received" : "sent",
     emailId: item.id,
-    id: item.kind === "received" ? f.id : "", // sent attachments are looked up by filename
+    id: f.id,
     filename: f.filename,
     size: f.size,
   }));
