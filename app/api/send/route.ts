@@ -11,7 +11,9 @@ const clean = (list: unknown) =>
 export const POST = authed(async (request, user) => {
   const form = await request.formData();
   const meta = JSON.parse(String(form.get("meta") ?? "{}")) as SendMeta;
-  const files = form.getAll("attachments").filter((f): f is File => f instanceof File);
+  const files = form.getAll("attachments").filter(
+    (f): f is File => !!f && typeof f === "object" && "name" in f && typeof (f as File).arrayBuffer === "function",
+  );
   const remote = meta.remote ?? [];
   // forwarded attachments must come from mail this mailbox can actually see
   for (const r of remote) {
@@ -61,17 +63,21 @@ export const POST = authed(async (request, user) => {
     return Response.json({ error: error?.message ?? "Resend rejected the email" }, { status: 502 });
   }
 
-  await userDb(user).sent.upsert({
-    id: data.id,
-    to, cc, bcc, subject,
-    html: meta.html,
-    text: meta.text,
-    attachments: [
-      ...files.map((f) => ({ filename: f.name, size: f.size })),
-      ...remote.map((r) => ({ filename: r.filename, size: r.size })),
-    ],
-    scheduledAt: meta.scheduledAt || null,
-    sentAt: new Date().toISOString(),
-  });
+  try {
+    await userDb(user).sent.upsert({
+      id: data.id,
+      to, cc, bcc, subject,
+      html: meta.html,
+      text: meta.text,
+      attachments: [
+        ...files.map((f) => ({ filename: f.name, size: f.size })),
+        ...remote.map((r) => ({ filename: r.filename, size: r.size })),
+      ],
+      scheduledAt: meta.scheduledAt || null,
+      sentAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("[send] could not persist sent record:", (err as Error).message);
+  }
   return Response.json({ id: data.id });
 });

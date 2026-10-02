@@ -194,6 +194,7 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
       onClose(true);
     } catch (e) {
       toast(`Couldn’t save draft: ${(e as Error).message}`);
+      onClose(false);
     }
   }
 
@@ -207,7 +208,9 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
     const d = new Date();
     if (preset === "custom") {
       if (!customWhen) return toast("Pick a date and time first");
-      d.setTime(new Date(customWhen).getTime());
+      const parsed = new Date(customWhen);
+      if (isNaN(parsed.getTime())) return toast("Pick a valid date and time");
+      d.setTime(parsed.getTime());
     } else if (preset === "monday") {
       d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7));
       d.setHours(8, 0, 0, 0);
@@ -382,7 +385,7 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
           <div className="lbl">Pick date &amp; time</div>
           <input type="datetime-local" value={customWhen} onChange={(e) => setCustomWhen(e.target.value)} />
           <button role="menuitem" onClick={() => schedule("custom")}>
-            Schedule{customWhen ? <small>{fmtDate(new Date(customWhen).toISOString(), true)}</small> : null}
+            Schedule{customWhen && !isNaN(new Date(customWhen).getTime()) ? <small>{fmtDate(new Date(customWhen).toISOString(), true)}</small> : null}
           </button>
         </div>
       )}

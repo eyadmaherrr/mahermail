@@ -21,7 +21,11 @@ export async function withRetry<T extends ResendResult>(call: () => Promise<T>, 
 }
 
 /** Whether a message was addressed to this mailbox (to / cc / envelope recipients). */
-export function addressedTo(email: { to: string[]; cc: string[]; received_for?: string[] }, address: string) {
+export function addressedTo(email: { to?: string[]; cc?: string[]; received_for?: string[] }, address: string) {
+  if (!address) return false;
   const a = address.toLowerCase();
-  return [...email.to, ...email.cc, ...(email.received_for ?? [])].some((x) => x.toLowerCase().includes(a));
+  const to = Array.isArray(email.to) ? email.to : [];
+  const cc = Array.isArray(email.cc) ? email.cc : [];
+  const rf = Array.isArray(email.received_for) ? email.received_for : [];
+  return [...to, ...cc, ...rf].some((x) => typeof x === "string" && x.toLowerCase().includes(a));
 }

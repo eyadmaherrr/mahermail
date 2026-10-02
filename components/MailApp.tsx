@@ -466,8 +466,11 @@ export default function MailApp({ account, initialSettings }: { account: Account
 
   const contacts = useMemo(() => {
     const set = new Set<string>();
-    sent.forEach((e) => [...e.to, ...e.cc, ...e.bcc].forEach((a) => set.add(a)));
-    inbox.forEach((e) => set.add(parseAddress(e.from).email));
+    sent.forEach((e) => [...(e.to || []), ...(e.cc || []), ...(e.bcc || [])].forEach((a) => a && set.add(a)));
+    inbox.forEach((e) => {
+      const em = parseAddress(e.from).email;
+      if (em) set.add(em);
+    });
     return [...set];
   }, [sent, inbox]);
 

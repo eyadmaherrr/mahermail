@@ -26,8 +26,11 @@ export function fmtSize(n: number) {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
-export function fmtDate(iso: string, long = false) {
-  const d = new Date(iso), now = new Date();
+export function fmtDate(iso: string | null | undefined, long = false) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
   if (long) return d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
   if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return d.toLocaleDateString([], {
@@ -37,13 +40,14 @@ export function fmtDate(iso: string, long = false) {
 }
 
 export const escapeHtml = (s: string) =>
-  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+  (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 /** Parse `Name <a@b.com>` / `a@b.com` into parts. */
-export function parseAddress(raw: string) {
-  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
-  const email = (m ? m[2] : raw).trim();
-  const name = (m?.[1] || "").trim() || email.split("@")[0];
+export function parseAddress(raw: string | undefined | null) {
+  const str = (raw || "").trim();
+  const m = str.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  const email = (m ? m[2] : str).trim();
+  const name = (m?.[1] || "").trim() || email.split("@")[0] || email || "Unknown";
   return { name, email };
 }
 
@@ -51,15 +55,24 @@ export function parseAddress(raw: string) {
 export function avatarColor(seed: string) {
   const palette = ["#176b9c", "#0b2d4d", "#2d9cdb", "#1a4a6e", "#3b7f8f", "#5a6fb0", "#7a5c9e", "#2f8f6f"];
   let h = 0;
-  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  for (const c of seed || "") h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return palette[h % palette.length];
 }
 
-// DOMParser documents are inert: no scripts run and no images load while we inspect them.
-const parse = (html: string) => new DOMParser().parseFromString(html, "text/html");
-
-export function stripHtml(html: string) {
-  return (parse(html).body.textContent ?? "").replace(/\s+/g, " ").trim();
+export function stripHtml(html: string | undefined | null) {
+  if (!html) return "";
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 const DROP_TAGS = "script,style,iframe,frame,object,embed,link,meta,base,form,input,button,select,textarea,title,head";
@@ -69,7 +82,9 @@ const DROP_TAGS = "script,style,iframe,frame,object,embed,link,meta,base,form,in
  * Removes active content, event handlers and javascript: URLs.
  */
 export function sanitizeHtml(html: string) {
-  const doc = parse(html);
+  if (!html) return "";
+  if (typeof DOMParser === "undefined") return html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  const doc = new DOMParser().parseFromString(html, "text/html");
   doc.querySelectorAll(DROP_TAGS).forEach((el) => el.remove());
   doc.body.querySelectorAll("*").forEach((el) => {
     for (const attr of Array.from(el.attributes)) {

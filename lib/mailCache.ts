@@ -2,10 +2,16 @@
 // (data/cache) — reopening a message, even after a restart, needs no call to Resend.
 import { promises as fs } from "fs";
 import path from "path";
+import os from "os";
 import { resend, withRetry } from "./config";
 import type { ReceivedEmail } from "./types";
 
-const DIR = path.join(process.cwd(), "data", "cache", "received");
+const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === "production";
+const DIR = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, "cache", "received")
+  : (isServerless ? path.join(os.tmpdir(), "maher-mailer", "cache", "received") : path.join(process.cwd(), "data", "cache", "received"));
+const SEED_DIR = path.join(process.cwd(), "data", "cache", "received");
+
 const memory = new Map<string, ReceivedEmail>();
 const inflight = new Map<string, Promise<ReceivedEmail>>();
 const SAFE_ID = /^[A-Za-z0-9-]{8,64}$/;
@@ -30,29 +36,39 @@ async function load(id: string): Promise<ReceivedEmail> {
     memory.set(id, email);
     return email;
   } catch {
-    // not cached yet
+    if (DIR !== SEED_DIR) {
+      try {
+        const email = JSON.parse(await fs.readFile(path.join(SEED_DIR, `${id}.json`), "utf8")) as ReceivedEmail;
+        memory.set(id, email);
+        return email;
+      } catch {}
+    }
   }
 
   const { data, error } = await withRetry(() => resend().emails.receiving.get(id));
   if (error || !data) throw new Error(error?.message ?? "Message not found");
   const email: ReceivedEmail = {
     id: data.id,
-    from: data.from,
+    from: data.from || "",
     to: data.to ?? [],
     cc: data.cc ?? [],
-    subject: data.subject,
-    created_at: data.created_at,
+    subject: data.subject || "",
+    created_at: data.created_at || new Date().toISOString(),
     received_for: data.received_for ?? [],
     html: data.html,
     text: data.text,
     reply_to: data.reply_to ?? [],
     message_id: data.message_id,
-    attachments: data.attachments.map((a) => ({
+    attachments: (data.attachments ?? []).map((a) => ({
       id: a.id, filename: a.filename, size: a.size, content_disposition: a.content_disposition,
     })),
   };
   memory.set(id, email);
-  await fs.mkdir(DIR, { recursive: true });
-  await fs.writeFile(file, JSON.stringify(email)).catch(() => {});
+  try {
+    await fs.mkdir(DIR, { recursive: true });
+    await fs.writeFile(file, JSON.stringify(email));
+  } catch {
+    // ignore disk cache failure on read-only environments
+  }
   return email;
 }

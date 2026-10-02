@@ -1,15 +1,22 @@
 import { promises as fs } from "fs";
 import path from "path";
+import os from "os";
 
 /**
  * Gravatar photo for an email hash (SHA-256 of the trimmed, lowercased address).
  * Proxied so the API key stays on the server, and cached on disk for a day so each
  * address is looked up at most once a day. 404 = no photo → the UI keeps the initials.
  */
-const DIR = path.join(process.cwd(), "data", "cache", "avatars");
+const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === "production";
+const DIR = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, "cache", "avatars")
+  : (isServerless ? path.join(os.tmpdir(), "maher-mailer", "cache", "avatars") : path.join(process.cwd(), "data", "cache", "avatars"));
+const SEED_DIR = path.join(process.cwd(), "data", "cache", "avatars");
+
 const TTL = 24 * 60 * 60 * 1000;
 const HASH = /^[a-f0-9]{64}$/;
 const inflight = new Map<string, Promise<Avatar | null>>();
+const memoryAvatars = new Map<string, { at: number; avatar: Avatar | null }>();
 
 type Avatar = { type: string; body: Buffer };
 
@@ -29,21 +36,52 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/avatar/[hash]">
 }
 
 async function resolve(hash: string): Promise<Avatar | null> {
+  const mem = memoryAvatars.get(hash);
+  if (mem && Date.now() - mem.at < TTL) {
+    return mem.avatar;
+  }
+
   const meta = path.join(DIR, `${hash}.json`);
   try {
     const m = JSON.parse(await fs.readFile(meta, "utf8")) as { at: number; type: string | null };
     if (Date.now() - m.at < TTL) {
-      return m.type ? { type: m.type, body: await fs.readFile(path.join(DIR, `${hash}.img`)) } : null;
+      if (m.type) {
+        const body = await fs.readFile(path.join(DIR, `${hash}.img`));
+        const av: Avatar = { type: m.type, body };
+        memoryAvatars.set(hash, { at: m.at, avatar: av });
+        return av;
+      } else {
+        memoryAvatars.set(hash, { at: m.at, avatar: null });
+        return null;
+      }
     }
   } catch {
-    // not cached yet
+    if (DIR !== SEED_DIR) {
+      try {
+        const m = JSON.parse(await fs.readFile(path.join(SEED_DIR, `${hash}.json`), "utf8")) as { at: number; type: string | null };
+        if (Date.now() - m.at < TTL) {
+          if (m.type) {
+            const body = await fs.readFile(path.join(SEED_DIR, `${hash}.img`));
+            const av: Avatar = { type: m.type, body };
+            memoryAvatars.set(hash, { at: m.at, avatar: av });
+            return av;
+          }
+        }
+      } catch {}
+    }
   }
 
   const avatar = await fromGravatar(hash).catch(() => undefined);
   if (avatar === undefined) return null; // network trouble: don't cache, try again next time
-  await fs.mkdir(DIR, { recursive: true });
-  if (avatar) await fs.writeFile(path.join(DIR, `${hash}.img`), avatar.body);
-  await fs.writeFile(meta, JSON.stringify({ at: Date.now(), type: avatar?.type ?? null }));
+
+  memoryAvatars.set(hash, { at: Date.now(), avatar: avatar ?? null });
+  try {
+    await fs.mkdir(DIR, { recursive: true });
+    if (avatar) await fs.writeFile(path.join(DIR, `${hash}.img`), avatar.body);
+    await fs.writeFile(meta, JSON.stringify({ at: Date.now(), type: avatar?.type ?? null }));
+  } catch {
+    // ignore disk write failure on read-only environments
+  }
   return avatar;
 }
 

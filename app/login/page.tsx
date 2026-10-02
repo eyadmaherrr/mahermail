@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import LoginForm from "@/components/LoginForm";
 import { ACCOUNTS } from "@/lib/accounts";
-import { currentUser } from "@/lib/session";
+import { currentUser, getAccountPassword } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Sign in — Maher Mail" };
 
@@ -11,7 +11,7 @@ export default async function LoginPage() {
   // only mailboxes with a password configured in .env can sign in
   const accounts = ACCOUNTS.map((a) => ({
     ...a,
-    enabled: !!process.env[`${a.id.toUpperCase()}_PASSWORD`],
+    enabled: !!getAccountPassword(a.id),
   }));
   return <LoginForm accounts={accounts} />;
 }

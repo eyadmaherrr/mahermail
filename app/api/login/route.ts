@@ -33,6 +33,5 @@ export async function POST(request: Request) {
 
   failures.delete(account.id);
   await startSession(account, !!remember);
-  // start the new session with a clean browser cache (nothing left over from the previous mailbox)
-  return Response.json({ ok: true }, { headers: { "Clear-Site-Data": '"cache"' } });
+  return Response.json({ ok: true });
 }

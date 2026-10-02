@@ -33,7 +33,8 @@ export function fromReceived(e: InboxItem, flags: Flags, ownEmail: string): Item
   const files = e.attachments
     .filter((a) => a.content_disposition !== "inline")
     .map((a) => ({ id: a.id, filename: a.filename ?? "attachment", size: a.size }));
-  const mailbox = [...e.to, ...e.cc].find((a) => a.toLowerCase().endsWith(ownEmail.split("@")[1].toLowerCase()));
+  const domain = ownEmail.includes("@") ? ownEmail.split("@")[1].toLowerCase() : "";
+  const mailbox = domain ? [...e.to, ...e.cc].find((a) => typeof a === "string" && a.toLowerCase().endsWith(domain)) : undefined;
   return {
     id: e.id,
     kind: "received",
