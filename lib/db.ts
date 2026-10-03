@@ -13,6 +13,9 @@ const SEED_ROOT = path.join(process.cwd(), "data", "users");
 // Memory cache prevents EROFS errors from breaking the user experience and provides instant access
 const memCache = new Map<string, unknown>();
 
+// keep the flags file small: drop entries that no longer carry any state
+const isEmptyFlag = (f: Flag) => !f.starred && !f.important && !f.read && !f.hidden && !f.removed;
+
 export function userDb(user: Account) {
   const dir = path.join(ROOT, user.id);
   const seedDir = path.join(SEED_ROOT, user.id);
@@ -93,7 +96,7 @@ export function userDb(user: Account) {
       const all = await read<Flags>("flags.json", {});
       const next = { ...all[id], ...patch };
       // keep the file small: drop entries that no longer carry any state
-      if (!next.starred && !next.important && !next.read && !next.hidden) delete all[id];
+      if (isEmptyFlag(next)) delete all[id];
       else all[id] = next;
       await write("flags.json", all);
       return all;
@@ -103,7 +106,7 @@ export function userDb(user: Account) {
       const all = await read<Flags>("flags.json", {});
       for (const { id, ...patch } of entries) {
         const next = { ...all[id], ...patch };
-        if (!next.starred && !next.important && !next.read && !next.hidden) delete all[id];
+        if (isEmptyFlag(next)) delete all[id];
         else all[id] = next;
       }
       await write("flags.json", all);

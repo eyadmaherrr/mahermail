@@ -14,7 +14,7 @@ export const POST = authed(async (request, user) => {
   const files = form.getAll("attachments").filter(
     (f): f is File => !!f && typeof f === "object" && "name" in f && typeof (f as File).arrayBuffer === "function",
   );
-  const remote = meta.remote ?? [];
+  const remote = Array.isArray(meta.remote) ? meta.remote : [];
   // forwarded attachments must come from mail this mailbox can actually see
   for (const r of remote) {
     if (!(await canAccess(user, r.kind, r.emailId))) {

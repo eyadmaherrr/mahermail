@@ -20,15 +20,25 @@ export async function withRetry<T extends ResendResult>(call: () => Promise<T>, 
   throw new Error("unreachable");
 }
 
-/** Whether a message was addressed to this mailbox (to / cc / envelope recipient). */
+/** The bare, lowercased address from `Name <a@b.com>` or `a@b.com`. */
+export function addressOf(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const m = raw.match(/<([^>]+)>/);
+  return (m ? m[1] : raw).trim().toLowerCase();
+}
+
+/**
+ * Whether a message was addressed to this mailbox (to / cc / bcc / envelope recipient).
+ * Addresses must match exactly — a substring test would let `anas@` read mail for `hanas@`.
+ */
 export function addressedTo(email: { to?: string[]; cc?: string[]; bcc?: string[]; received_for?: string[] }, address?: string) {
-  if (!address) return false;
-  const target = address.trim().toLowerCase();
+  const target = addressOf(address);
+  if (!target) return false;
   const recipients = [
     ...(Array.isArray(email.to) ? email.to : []),
     ...(Array.isArray(email.cc) ? email.cc : []),
     ...(Array.isArray(email.bcc) ? email.bcc : []),
     ...(Array.isArray(email.received_for) ? email.received_for : []),
   ];
-  return recipients.some((r) => typeof r === "string" && r.toLowerCase().includes(target));
+  return recipients.some((r) => addressOf(r) === target);
 }

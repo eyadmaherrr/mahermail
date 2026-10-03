@@ -6,7 +6,7 @@ import RecipientField from "./RecipientField";
 import { EMAIL_RE, api, escapeHtml, fmtDate, fmtSize, splitAddresses } from "@/lib/client";
 import {
   MAX_ATTACHMENT_BYTES,
-  type ComposeSeed, type Field, type Recipients, type RemoteAttachment, type SendMeta, type Settings,
+  type ComposeSeed, type Draft, type Field, type Recipients, type RemoteAttachment, type SendMeta, type Settings,
 } from "@/lib/types";
 
 /** Everything needed to send — or to reopen the window exactly as it was if the send is undone. */
@@ -20,7 +20,7 @@ type Props = {
   contactsId: string;
   toast: (msg: string) => void;
   /** Window went away without sending; `changed` = drafts need a reload. */
-  onClose: (changed: boolean) => void;
+  onClose: (changed: boolean, info?: { discardedId?: string; unsaved?: Draft }) => void;
   onSend: (out: Outgoing) => void;
 };
 
@@ -192,16 +192,24 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
       await api("POST", "/api/drafts", { id: draftId.current, ...r, subject, html: editorRef.current!.innerHTML });
       toast(files.length || remote.length ? "Draft saved — attachments aren’t kept in drafts" : "Draft saved");
       onClose(true);
-    } catch (e) {
-      toast(`Couldn’t save draft: ${(e as Error).message}`);
-      onClose(false);
+    } catch {
+      // don't throw the message away: hand it back so it's kept as a draft in this browser
+      onClose(false, {
+        unsaved: {
+          id: draftId.current || `local-${Date.now().toString(36)}`,
+          ...r,
+          subject,
+          html: editorRef.current!.innerHTML,
+          savedAt: new Date().toISOString(),
+        },
+      });
     }
   }
 
   async function discard() {
     if (draftId.current) await api("DELETE", `/api/drafts/${encodeURIComponent(draftId.current)}`).catch(() => {});
     toast("Draft discarded");
-    onClose(true);
+    onClose(true, { discardedId: draftId.current });
   }
 
   function schedule(preset: "tomorrow-am" | "tomorrow-pm" | "monday" | "custom") {

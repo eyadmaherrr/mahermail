@@ -61,7 +61,8 @@ export type ItemMeta = {
   hasAttachments: boolean;
 };
 
-export type Flag = { starred?: boolean; important?: boolean; read?: boolean; hidden?: boolean; meta?: ItemMeta };
+/** Per-message state. `removed` = taken off the Sent list (kept so Resend's copy doesn't bring it back). */
+export type Flag = { starred?: boolean; important?: boolean; read?: boolean; hidden?: boolean; removed?: boolean; meta?: ItemMeta };
 export type Flags = Record<string, Flag>;
 
 /** What the compose window is opened with: a draft, reply, forward, or undone send. */

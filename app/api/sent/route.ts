@@ -1,4 +1,4 @@
-import { resend } from "@/lib/config";
+import { addressOf, resend } from "@/lib/config";
 import { userDb } from "@/lib/db";
 import { authed } from "@/lib/session";
 import type { SentEmail } from "@/lib/types";
@@ -6,8 +6,9 @@ import type { SentEmail } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 export const GET = authed(async (_req, user) => {
-  const local = await userDb(user).sent.list();
-  const userEmail = user.email.trim().toLowerCase();
+  const db = userDb(user);
+  const [local, flags] = await Promise.all([db.sent.list(), db.flags.all()]);
+  const userEmail = addressOf(user.email);
 
   // Fetch sent messages from Resend belonging ONLY to this user's email address
   let remoteEmails: SentEmail[] = [];
@@ -15,7 +16,7 @@ export const GET = authed(async (_req, user) => {
     const { data } = await resend().emails.list({ limit: 100 });
     if (data?.data && Array.isArray(data.data)) {
       remoteEmails = data.data
-        .filter((e) => e.from && e.from.toLowerCase().includes(userEmail))
+        .filter((e) => addressOf(e.from) === userEmail)
         .map((e) => ({
           id: e.id,
           to: Array.isArray(e.to) ? e.to : typeof e.to === "string" ? [e.to] : [],
@@ -42,8 +43,7 @@ export const GET = authed(async (_req, user) => {
     }
   }
 
-  // Sort newest first
+  // Sort newest first, leaving out anything the user removed from the list
   merged.sort((a, b) => +new Date(b.sentAt) - +new Date(a.sentAt));
-
-  return Response.json(merged);
+  return Response.json(merged.filter((e) => !flags[e.id]?.removed));
 });

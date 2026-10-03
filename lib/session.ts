@@ -10,8 +10,10 @@ const DAY = 24 * 60 * 60 * 1000;
 function secret() {
   const s = process.env.SESSION_SECRET;
   if (s && s.length >= 32) return s;
-  // Fallback so the app never throws a 500 error on Vercel if SESSION_SECRET is missing or <32 chars
-  const seed = (process.env.SESSION_SECRET || "") + (process.env.RESEND_API_KEY || "") + "maher-mailer-session-secret-salt-2026";
+  // Fallback when SESSION_SECRET isn't set: derive a key from the (private) Resend key.
+  // Never fall back to the salt alone — it's in the public repo, so anyone could forge a login.
+  if (!process.env.RESEND_API_KEY) throw new Error("Set SESSION_SECRET (32+ characters) in the environment");
+  const seed = (s || "") + process.env.RESEND_API_KEY + "maher-mailer-session-secret-salt-2026";
   return createHash("sha256").update(seed).digest("hex");
 }
 

@@ -1,3 +1,4 @@
+import { canAccess } from "@/lib/access";
 import { resend } from "@/lib/config";
 import { userDb } from "@/lib/db";
 import { authed } from "@/lib/session";
@@ -10,6 +11,10 @@ export const GET = authed(async (_req, user, ctx: RouteContext<"/api/sent/[id]">
   const list = await userDb(user).sent.list();
   const local = list.find((e) => e.id === id);
   if (local && (local.html || local.text)) return Response.json(local);
+  // only the mailbox that sent it may read it
+  if (!local && !(await canAccess(user, "sent", id))) {
+    return Response.json({ error: "Email not found" }, { status: 404 });
+  }
 
   try {
     const { data } = await resend().emails.get(id);
@@ -20,7 +25,7 @@ export const GET = authed(async (_req, user, ctx: RouteContext<"/api/sent/[id]">
         cc: Array.isArray(data.cc) ? data.cc : typeof data.cc === "string" ? [data.cc] : [],
         bcc: Array.isArray(data.bcc) ? data.bcc : typeof data.bcc === "string" ? [data.bcc] : [],
         subject: data.subject || "(no subject)",
-        html: data.html || (data.text ? `<pre>${data.text}</pre>` : ""),
+        html: data.html || (data.text ? `<pre>${escapeHtml(data.text)}</pre>` : ""),
         text: data.text || "",
         attachments: local?.attachments || [],
         scheduledAt: data.scheduled_at ?? null,
@@ -40,8 +45,16 @@ export const GET = authed(async (_req, user, ctx: RouteContext<"/api/sent/[id]">
   return Response.json({ error: "Email not found" }, { status: 404 });
 });
 
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/**
+ * Remove from the Sent list. The list also merges in Resend's own record of sent mail, so the
+ * removal is remembered as a flag — otherwise the message would reappear on the next refresh.
+ */
 export const DELETE = authed(async (_req, user, ctx: RouteContext<"/api/sent/[id]">) => {
   const { id } = await ctx.params;
-  await userDb(user).sent.remove(id);
-  return Response.json({ ok: true });
+  const db = userDb(user);
+  await db.sent.remove(id);
+  return Response.json(await db.flags.patch(id, { removed: true }));
 });

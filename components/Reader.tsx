@@ -60,7 +60,9 @@ export default function Reader(p: Props) {
       }
     }
     return () => { live = false; };
-  }, [item.id, item.kind, item.hasAttachments, p.sentRecord]);
+    // depend on whether a body is present, not the record object (it's re-created on every list reload)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id, item.kind, item.hasAttachments, !!(p.sentRecord?.html || p.sentRecord?.text)]);
 
   const sent = fetchedSent ?? p.sentRecord;
 

@@ -23,17 +23,17 @@ export default function MailApp({ account, initialSettings }: { account: Account
   const DRAFTS_KEY = `mm_drafts_${account.id}`;
   const VIEW_KEY = `mm_view_${account.id}`;
   const LAST_OPENED_KEY = `mm_last_opened_${account.id}`;
+  const DELETED_DRAFTS_KEY = `mm_drafts_deleted_${account.id}`;
 
-  // merge over defaults so settings added in newer versions always start defined
-  const [settings, setSettings] = useState<Settings>(() => ({
-    ...DEFAULT_SETTINGS,
-    ...prefs.get<Settings>(SETTINGS_KEY, initialSettings),
-  }));
-  const [view, setView] = useState<View>(() => prefs.get<View>(VIEW_KEY, "inbox"));
+  // The first render must match the server's HTML exactly, so it uses only server data.
+  // What this browser remembers (localStorage) is applied right after mount — see below.
+  // Merge over defaults so settings added in newer versions always start defined.
+  const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...initialSettings }));
+  const [view, setView] = useState<View>("inbox");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // the message you just read stays highlighted in the list after going back
-  const [lastOpenedId, setLastOpenedId] = useState<string | null>(() => prefs.get<string | null>(LAST_OPENED_KEY, null));
+  const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -41,35 +41,57 @@ export default function MailApp({ account, initialSettings }: { account: Account
   const [inboxNext, setInboxNext] = useState<string | null>(null);
   const [inboxState, setInboxState] = useState<{ loading: boolean; more: boolean; error: string | null }>({ loading: true, more: false, error: null });
   const [sent, setSent] = useState<SentEmail[]>([]);
-  const [drafts, setDrafts] = useState<Draft[]>(() => prefs.get<Draft[]>(DRAFTS_KEY, []));
-  const [flags, setFlags] = useState<Flags>(() => prefs.get<Flags>(FLAGS_KEY, {}));
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [flags, setFlags] = useState<Flags>({});
   const [localLoaded, setLocalLoaded] = useState(false);
 
-  // Keep localStorage continuously synced as a resilient offline/client-side cache
+  // Restore what this browser remembers, once, after the first (server-matching) render.
+  const [restored, setRestored] = useState(false);
   useEffect(() => {
-    prefs.set(FLAGS_KEY, flags);
-  }, [flags, FLAGS_KEY]);
+    const deleted = new Set(prefs.get<string[]>(DELETED_DRAFTS_KEY, []));
+    const savedSettings = prefs.get<Partial<Settings> | null>(SETTINGS_KEY, null);
+    if (savedSettings) setSettings((s) => ({ ...s, ...savedSettings }));
+    setView(prefs.get<View>(VIEW_KEY, "inbox"));
+    setLastOpenedId(prefs.get<string | null>(LAST_OPENED_KEY, null));
+    // merge with anything the server already sent back, rather than overwriting it
+    setDrafts((curr) => {
+      const byId = new Map(prefs.get<Draft[]>(DRAFTS_KEY, []).map((d) => [d.id, d]));
+      for (const d of curr) byId.set(d.id, d);
+      return [...byId.values()].filter((d) => !deleted.has(d.id));
+    });
+    setFlags((curr) => ({ ...prefs.get<Flags>(FLAGS_KEY, {}), ...curr }));
+    setRestored(true);
+    // keys are fixed for this signed-in account
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Keep localStorage synced as a resilient client-side copy — but only after restoring,
+  // so the empty first-render state never overwrites what was saved.
+  useEffect(() => { if (restored) prefs.set(FLAGS_KEY, flags); }, [restored, flags, FLAGS_KEY]);
+  useEffect(() => { if (restored) prefs.set(SETTINGS_KEY, settings); }, [restored, settings, SETTINGS_KEY]);
+  useEffect(() => { if (restored) prefs.set(DRAFTS_KEY, drafts); }, [restored, drafts, DRAFTS_KEY]);
+  useEffect(() => { if (restored) prefs.set(VIEW_KEY, view); }, [restored, view, VIEW_KEY]);
   useEffect(() => {
-    prefs.set(SETTINGS_KEY, settings);
-  }, [settings, SETTINGS_KEY]);
+    if (restored && lastOpenedId) prefs.set(LAST_OPENED_KEY, lastOpenedId);
+  }, [restored, lastOpenedId, LAST_OPENED_KEY]);
 
-  useEffect(() => {
-    prefs.set(DRAFTS_KEY, drafts);
-  }, [drafts, DRAFTS_KEY]);
-
-  useEffect(() => {
-    prefs.set(VIEW_KEY, view);
-  }, [view, VIEW_KEY]);
-
-  useEffect(() => {
-    if (lastOpenedId) prefs.set(LAST_OPENED_KEY, lastOpenedId);
-  }, [lastOpenedId, LAST_OPENED_KEY]);
+  /**
+   * Forget drafts that were discarded or sent. The ids are remembered so a copy still sitting in
+   * this browser (or a server delete that failed) can't bring them back on the next refresh.
+   */
+  const forgetDrafts = useCallback((ids: (string | undefined)[]) => {
+    const list = ids.filter((id): id is string => !!id);
+    if (!list.length) return;
+    const gone = new Set([...prefs.get<string[]>(DELETED_DRAFTS_KEY, []), ...list]);
+    prefs.set(DELETED_DRAFTS_KEY, [...gone].slice(-500));
+    setDrafts((curr) => curr.filter((d) => !gone.has(d.id)));
+  }, [DELETED_DRAFTS_KEY]);
 
   const [compose, setCompose] = useState<{ key: number; seed: ComposeSeed } | null>(null);
   const [toast, setToast] = useState<Toast>({ text: "", on: false });
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const pendingSend = useRef<{ timer: ReturnType<typeof setTimeout>; fire: () => void } | null>(null);
+  // every send still inside its undo window (there can be more than one)
+  const pendingSends = useRef(new Set<ReturnType<typeof setTimeout>>());
   const seenIds = useRef<Set<string> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const readerActions = useRef<ReaderActions | null>(null);
@@ -102,11 +124,10 @@ export default function MailApp({ account, initialSettings }: { account: Account
       ]);
       setSent(s);
       setDrafts((curr) => {
+        const deleted = new Set(prefs.get<string[]>(DELETED_DRAFTS_KEY, []));
         const byId = new Map(curr.map((x) => [x.id, x]));
         for (const draft of d) byId.set(draft.id, draft);
-        const merged = [...byId.values()];
-        prefs.set(DRAFTS_KEY, merged);
-        return merged;
+        return [...byId.values()].filter((x) => !deleted.has(x.id));
       });
       setFlags((curr) => {
         // Merge server flags with local flags so no client-side hidden/read state is ever lost
@@ -119,7 +140,7 @@ export default function MailApp({ account, initialSettings }: { account: Account
     } finally {
       setLocalLoaded(true);
     }
-  }, [notify, DRAFTS_KEY, FLAGS_KEY]);
+  }, [notify, DELETED_DRAFTS_KEY, FLAGS_KEY]);
 
   /** Fetch the newest page. On refresh, merge in anything new and announce it. */
   const loadInbox = useCallback(async (reset: boolean) => {
@@ -192,14 +213,14 @@ export default function MailApp({ account, initialSettings }: { account: Account
   /* ---------------- derived lists ---------------- */
   const sentById = useMemo(() => new Map(sent.map((s) => [s.id, s])), [sent]);
   const receivedItems = useMemo(() => inbox.map((e) => fromReceived(e, flags, ownEmail)), [inbox, flags, ownEmail]);
-  const sentItems = useMemo(() => sent.map((e) => fromSent(e, flags)), [sent, flags]);
+  const sentItems = useMemo(() => sent.filter((e) => !flags[e.id]?.removed).map((e) => fromSent(e, flags)), [sent, flags]);
   const unread = receivedItems.filter((i) => i.unread && !i.hidden).length;
 
   // hidden mail only appears in the Hidden section
   const flagged = useCallback((key: "starred" | "important" | "hidden") => {
     const known = new Map([...receivedItems, ...sentItems].map((i) => [i.id, i]));
     return Object.entries(flags)
-      .filter(([, f]) => f[key] && (key === "hidden" || !f.hidden))
+      .filter(([, f]) => f[key] && !f.removed && (key === "hidden" || !f.hidden))
       .map(([id, f]) => known.get(id) ?? (f.meta ? fromMeta(id, f.meta, f) : null))
       .filter((i): i is Item => !!i)
       .sort(byDateDesc);
@@ -219,12 +240,12 @@ export default function MailApp({ account, initialSettings }: { account: Account
 
   const counts = {
     inbox: unread,
-    starred: Object.values(flags).filter((f) => f.starred && !f.hidden).length,
-    important: Object.values(flags).filter((f) => f.important && !f.hidden).length,
+    starred: Object.values(flags).filter((f) => f.starred && !f.hidden && !f.removed).length,
+    important: Object.values(flags).filter((f) => f.important && !f.hidden && !f.removed).length,
     sent: sentItems.filter((i) => !i.hidden).length,
     scheduled: sentItems.filter((i) => i.scheduled && !i.hidden).length,
     drafts: drafts.length,
-    hidden: Object.values(flags).filter((f) => f.hidden).length,
+    hidden: Object.values(flags).filter((f) => f.hidden && !f.removed).length,
   };
 
   const selected = items.find((i) => i.id === selectedId) ?? [...receivedItems, ...sentItems].find((i) => i.id === selectedId) ?? null;
@@ -406,6 +427,7 @@ export default function MailApp({ account, initialSettings }: { account: Account
   const discardDrafts = async (list: Item[]) => {
     if (!confirm(`Discard ${list.length === 1 ? "this draft" : `${list.length} drafts`}? This can’t be undone.`)) return;
     await Promise.all(list.map((d) => api("DELETE", `/api/drafts/${encodeURIComponent(d.id)}`).catch(() => {})));
+    forgetDrafts(list.map((d) => d.id));
     exitSelect();
     loadLocal();
     notify(list.length === 1 ? "Draft discarded" : `${list.length} drafts discarded`);
@@ -434,9 +456,10 @@ export default function MailApp({ account, initialSettings }: { account: Account
   };
 
   const signOut = async () => {
-    if (pendingSend.current && !confirm("A message is still waiting to send. Sign out anyway? It won’t be sent.")) return;
-    if (pendingSend.current) clearTimeout(pendingSend.current.timer);
-    pendingSend.current = null;
+    const waiting = pendingSends.current.size;
+    if (waiting && !confirm(`${waiting === 1 ? "A message is" : `${waiting} messages are`} still waiting to send. Sign out anyway? ${waiting === 1 ? "It" : "They"} won’t be sent.`)) return;
+    pendingSends.current.forEach(clearTimeout);
+    pendingSends.current.clear();
     await fetch("/api/logout", { method: "POST" }).catch(() => {});
     window.location.replace("/login");
   };
@@ -449,15 +472,19 @@ export default function MailApp({ account, initialSettings }: { account: Account
   /** Send with an undo window: the message only leaves after the delay. */
   const dispatch = (out: Outgoing) => {
     setCompose(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const fire = async () => {
-      pendingSend.current = null;
+      if (timer) pendingSends.current.delete(timer);
       notify(out.meta.scheduledAt ? "Scheduling…" : "Sending…", undefined, 30000);
       const form = new FormData();
       form.append("meta", JSON.stringify(out.meta));
       out.files.forEach((f) => form.append("attachments", f));
       try {
         const { id } = await api<{ id: string }>("POST", "/api/send", form);
-        if (out.draftId) await api("DELETE", `/api/drafts/${encodeURIComponent(out.draftId)}`).catch(() => {});
+        if (out.draftId) {
+          await api("DELETE", `/api/drafts/${encodeURIComponent(out.draftId)}`).catch(() => {});
+          forgetDrafts([out.draftId]);
+        }
         await loadLocal();
         notify(out.meta.scheduledAt ? `Scheduled for ${fmtDate(out.meta.scheduledAt, true)}` : "Message sent", {
           label: "View",
@@ -469,13 +496,14 @@ export default function MailApp({ account, initialSettings }: { account: Account
       }
     };
     if (settings.undoSeconds > 0) {
-      const timer = setTimeout(fire, settings.undoSeconds * 1000);
-      pendingSend.current = { timer, fire };
+      const t = setTimeout(fire, settings.undoSeconds * 1000);
+      timer = t;
+      pendingSends.current.add(t);
       notify(out.meta.scheduledAt ? "Scheduling…" : "Sending…", {
         label: "Undo",
         run: () => {
-          clearTimeout(timer);
-          pendingSend.current = null;
+          clearTimeout(t);
+          pendingSends.current.delete(t);
           setCompose({ key: Date.now(), seed: out.seed });
           notify("Sending undone");
         },
@@ -485,14 +513,15 @@ export default function MailApp({ account, initialSettings }: { account: Account
 
   // don't lose a message that's waiting out its undo window
   useEffect(() => {
-    const onUnload = (e: BeforeUnloadEvent) => { if (pendingSend.current) e.preventDefault(); };
+    const onUnload = (e: BeforeUnloadEvent) => { if (pendingSends.current.size) e.preventDefault(); };
     window.addEventListener("beforeunload", onUnload);
     return () => window.removeEventListener("beforeunload", onUnload);
   }, []);
 
   /* ---------------- keyboard shortcuts ---------------- */
-  const keyState = useRef({ items, selected, compose, settingsOpen, settings, selectMode });
-  keyState.current = { items, selected, compose, settingsOpen, settings, selectMode };
+  // the listener is attached once, so it reads current state *and* current handlers through this ref
+  const keyState = useRef({ items, selected, compose, settingsOpen, settings, selectMode, go, open, toggle, patchFlag, openCompose, updateSettings, exitSelect });
+  keyState.current = { items, selected, compose, settingsOpen, settings, selectMode, go, open, toggle, patchFlag, openCompose, updateSettings, exitSelect };
   useEffect(() => {
     let gPressed = 0;
     const onKey = (e: KeyboardEvent) => {
@@ -506,30 +535,30 @@ export default function MailApp({ account, initialSettings }: { account: Account
       const k = e.key.toLowerCase();
       if (Date.now() - gPressed < 1200) {
         gPressed = 0;
-        if (k === "i") return go("inbox");
-        if (k === "s") return go("sent");
-        if (k === "t") return go("starred");
+        if (k === "i") return s.go("inbox");
+        if (k === "s") return s.go("sent");
+        if (k === "t") return s.go("starred");
       }
       const idx = s.selected ? s.items.findIndex((i) => i.id === s.selected!.id) : -1;
       const step = (d: number) => {
         const next = s.items[Math.min(s.items.length - 1, Math.max(0, idx + d))];
-        if (next && next.kind !== "draft") open(next);
+        if (next && next.kind !== "draft") s.open(next);
       };
       switch (k) {
-        case "c": e.preventDefault(); if (!s.compose) openCompose(); break;
+        case "c": e.preventDefault(); if (!s.compose) s.openCompose(); break;
         case "/": e.preventDefault(); searchRef.current?.focus(); break;
         case "g": gPressed = Date.now(); break;
-        case "[": updateSettings({ sidebarCollapsed: !s.settings.sidebarCollapsed }); break;
+        case "[": s.updateSettings({ sidebarCollapsed: !s.settings.sidebarCollapsed }); break;
         case "j": step(1); break;
         case "k": step(-1); break;
-        case "s": if (s.selected) toggle(s.selected, "starred"); break;
-        case "i": if (s.selected) toggle(s.selected, "important"); break;
-        case "u": if (s.selected?.kind === "received") { patchFlag(s.selected, { read: false }); setSelectedId(null); } break;
+        case "s": if (s.selected) s.toggle(s.selected, "starred"); break;
+        case "i": if (s.selected) s.toggle(s.selected, "important"); break;
+        case "u": if (s.selected?.kind === "received") { s.patchFlag(s.selected, { read: false }); setSelectedId(null); } break;
         case "r": readerActions.current?.reply(); break;
         case "a": readerActions.current?.replyAll(); break;
         case "f": readerActions.current?.forward(); break;
         case "escape":
-          if (s.selectMode) exitSelect();
+          if (s.selectMode) s.exitSelect();
           else { setSelectedId(null); setSidebarOpen(false); }
           break;
       }
@@ -691,10 +720,17 @@ export default function MailApp({ account, initialSettings }: { account: Account
                 onMarkUnread={() => { patchFlag(selected, { read: false }); setSelectedId(null); notify("Marked as unread"); }}
                 onCompose={(seed) => openCompose(seed)}
                 onDelete={async () => {
-                  await api("DELETE", `/api/sent/${encodeURIComponent(selected.id)}`);
+                  const id = selected.id;
+                  // remembered as a flag so Resend's copy of the message doesn't bring it back
+                  setFlags((f) => ({ ...f, [id]: { ...f[id], removed: true } }));
                   setSelectedId(null);
+                  try {
+                    await api("DELETE", `/api/sent/${encodeURIComponent(id)}`);
+                    notify("Removed from your Sent list");
+                  } catch (e) {
+                    notify(`Couldn’t remove: ${(e as Error).message}`);
+                  }
                   loadLocal();
-                  notify("Removed from your Sent list");
                 }}
                 onCancelScheduled={async () => {
                   if (!confirm("Cancel this scheduled message? It won’t be sent.")) return;
@@ -721,7 +757,16 @@ export default function MailApp({ account, initialSettings }: { account: Account
           ownEmail={ownEmail}
           contactsId={CONTACTS_ID}
           toast={showToast}
-          onClose={(changed) => { setCompose(null); if (changed) loadLocal(); }}
+          onClose={(changed, info) => {
+            setCompose(null);
+            if (info?.discardedId) forgetDrafts([info.discardedId]);
+            if (info?.unsaved) {
+              const draft = info.unsaved;
+              setDrafts((curr) => [draft, ...curr.filter((d) => d.id !== draft.id)]);
+              notify("Couldn’t reach the server — draft kept on this device");
+            }
+            if (changed) loadLocal();
+          }}
           onSend={dispatch}
         />
       )}
