@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Avatar from "./Avatar";
+import FilePreview, { remoteFile } from "./FilePreview";
 import Icon from "./Icon";
 import { api, escapeHtml, fmtDate, fmtSize, isScheduled, parseAddress, sanitizeHtml, textToHtml } from "@/lib/client";
 import type { Item } from "@/lib/items";
+import { fileType } from "@/lib/filetypes";
 import { loadReceived, peekReceived } from "@/lib/prefetch";
 import type { ComposeSeed, ReceivedEmail, RemoteAttachment, SentEmail } from "@/lib/types";
 
@@ -26,6 +28,8 @@ type Props = {
   onDelete: () => void;
   onCancelScheduled: () => void;
   actionsRef: React.RefObject<ReaderActions | null>;
+  /** a sent email's body/attachments were just filled in from Resend */
+  onSentLoaded?: (email: SentEmail) => void;
   /** position in the current list, for the previous/next arrows */
   position: { index: number; total: number } | null;
   onPrev: () => void;
@@ -41,6 +45,7 @@ export default function Reader(p: Props) {
   const [fetchedSent, setFetchedSent] = useState<SentEmail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [preview, setPreview] = useState<number | null>(null); // which attachment is open in the previewer
 
   useEffect(() => {
     let live = true;
@@ -53,16 +58,17 @@ export default function Reader(p: Props) {
       api<{ status: string }>("GET", `/api/status/${encodeURIComponent(item.id)}`)
         .then((s) => live && setStatus(s.status))
         .catch(() => {});
-      if (!p.sentRecord || (!p.sentRecord.html && !p.sentRecord.text)) {
+      // fill in what we don't have yet: the body, or the list of files that were attached
+      if (!p.sentRecord || (!p.sentRecord.html && !p.sentRecord.text) || !p.sentRecord.attachmentsChecked) {
         api<SentEmail>("GET", `/api/sent/${encodeURIComponent(item.id)}`)
-          .then((s) => live && setFetchedSent(s))
-          .catch((e) => live && setError((e as Error).message));
+          .then((s) => { if (!live) return; setFetchedSent(s); p.onSentLoaded?.(s); })
+          .catch((e) => live && !p.sentRecord && setError((e as Error).message));
       }
     }
     return () => { live = false; };
-    // depend on whether a body is present, not the record object (it's re-created on every list reload)
+    // depend on what's present, not the record object (it's re-created on every list reload)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id, item.kind, item.hasAttachments, !!(p.sentRecord?.html || p.sentRecord?.text)]);
+  }, [item.id, item.kind, item.hasAttachments, !!(p.sentRecord?.html || p.sentRecord?.text), !!p.sentRecord?.attachmentsChecked]);
 
   const sent = fetchedSent ?? p.sentRecord;
 
@@ -75,13 +81,14 @@ export default function Reader(p: Props) {
           .map((a) => ({ id: a.id, filename: a.filename ?? "attachment", size: a.size })) ?? item.files ?? [])
           .map((a) => ({ ...a, href: `/api/files/received/${enc(item.id)}?id=${enc(a.id)}` }))
       : (sent?.attachments ?? []).map((a, i) => ({
-          id: `${i}-${a.filename}`, filename: a.filename, size: a.size,
-          href: `/api/files/sent/${enc(item.id)}?name=${enc(a.filename)}`,
+          id: a.id ?? `${i}-${a.filename}`, attId: a.id, filename: a.filename, size: a.size,
+          // by Resend's attachment id when we have it; older records only know the file name
+          href: a.id ? `/api/files/sent/${enc(item.id)}?id=${enc(a.id)}` : `/api/files/sent/${enc(item.id)}?name=${enc(a.filename)}`,
         }));
   const remote: RemoteAttachment[] = files.map((f) => ({
     kind: item.kind === "received" ? "received" : "sent",
     emailId: item.id,
-    id: item.kind === "received" ? f.id : "", // sent attachments are looked up by filename
+    id: item.kind === "received" ? f.id : f.attId ?? "", // no id → looked up by filename
     filename: f.filename,
     size: f.size,
   }));
@@ -234,16 +241,27 @@ export default function Reader(p: Props) {
         </div>
         </div>
 
-        {files.length > 0 && <AttachmentDock files={files} totalSize={totalSize} />}
+        {files.length > 0 && <AttachmentDock files={files} totalSize={totalSize} onOpen={setPreview} />}
+        {!isReceived && sent && !sent.attachmentsChecked && (
+          <div className="att-dock glass-thick"><div className="att-dock-head"><span className="spinner dark" /><small>Checking for attached files…</small></div></div>
+        )}
+        {preview !== null && files[preview] && (
+          <FilePreview
+            files={files.map((f) => remoteFile(f.id, f.filename, f.size, f.href))}
+            index={preview}
+            onIndex={setPreview}
+            onClose={() => setPreview(null)}
+          />
+        )}
       </div>
     </section>
   );
 }
 
-type DockFile = { id: string; filename: string; size: number; href: string };
+type DockFile = { id: string; attId?: string; filename: string; size: number; href: string };
 
-/** Files in the message, pinned to the bottom of the reader so they're always one click away. */
-function AttachmentDock({ files, totalSize }: { files: DockFile[]; totalSize: number }) {
+/** Files in the message, pinned to the bottom of the reader. Click one to preview it. */
+function AttachmentDock({ files, totalSize, onOpen }: { files: DockFile[]; totalSize: number; onOpen: (i: number) => void }) {
   const [open, setOpen] = useState(true);
   return (
     <div className={`att-dock glass-thick${open ? "" : " closed"}`} aria-label="Attachments">
@@ -256,27 +274,35 @@ function AttachmentDock({ files, totalSize }: { files: DockFile[]; totalSize: nu
       </button>
       {open && (
         <div className="att-row">
-          {files.map((f) => (
-            <a key={f.id} className="att-card glass-thin" href={f.href} target="_blank" rel="noreferrer" title={`Open ${f.filename}`}>
+          {files.map((f, i) => (
+            <div
+              key={f.id}
+              className="att-card glass-thin previewable"
+              role="button"
+              tabIndex={0}
+              title={`Preview ${f.filename}`}
+              onClick={() => onOpen(i)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(i); } }}
+            >
               <span className="ext" data-type={fileType(f.filename)}>{(f.filename.split(".").pop() ?? "file").slice(0, 4)}</span>
               <span className="meta"><span>{f.filename}</span><small>{fmtSize(f.size)}</small></span>
-              <Icon name="download" />
-            </a>
+              <a
+                className="icon-btn sm"
+                href={f.href}
+                target="_blank"
+                rel="noreferrer"
+                title={`Download ${f.filename}`}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <Icon name="download" />
+              </a>
+            </div>
           ))}
         </div>
       )}
     </div>
   );
-}
-
-function fileType(name: string) {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["pdf"].includes(ext)) return "pdf";
-  if (["png", "jpg", "jpeg", "gif", "webp", "heic", "svg"].includes(ext)) return "image";
-  if (["xls", "xlsx", "csv", "numbers"].includes(ext)) return "sheet";
-  if (["doc", "docx", "pages", "txt", "rtf"].includes(ext)) return "doc";
-  if (["zip", "rar", "7z"].includes(ext)) return "archive";
-  return "other";
 }
 
 /**

@@ -20,6 +20,15 @@ async function resilient<T extends Res>(call: (signal: AbortSignal) => Promise<T
   return last!;
 }
 
+/** The real (non-inline) attachments of a sent or received email, as Resend has them. */
+export async function listFiles(kind: Kind, emailId: string) {
+  const { data, error } = await resilient((signal) => api(kind).list({ emailId }, { signal }));
+  if (error || !data) throw new Error(error?.message ?? "Couldn't load attachments");
+  return data.data
+    .filter((a) => a.content_disposition !== "inline")
+    .map((a) => ({ id: a.id, filename: a.filename ?? "attachment", size: a.size, contentType: a.content_type }));
+}
+
 /** Fresh signed download URL for one attachment (looked up by id, or by filename for sent mail). */
 export async function attachmentUrl(kind: Kind, emailId: string, ref: { id?: string; name?: string }) {
   if (ref.id) {

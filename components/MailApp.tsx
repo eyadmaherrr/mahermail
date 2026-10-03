@@ -711,6 +711,7 @@ export default function MailApp({ account, initialSettings }: { account: Account
                 signatureHtml={signatureHtml}
                 blockImages={settings.blockRemoteImages}
                 actionsRef={readerActions}
+                onSentLoaded={(email) => setSent((curr) => curr.map((x) => (x.id === email.id ? email : x)))}
                 position={selectedIndex >= 0 ? { index: selectedIndex, total: items.length } : null}
                 onPrev={() => step(-1)}
                 onNext={() => step(1)}

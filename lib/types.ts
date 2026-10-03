@@ -7,7 +7,10 @@ export type SentEmail = Recipients & {
   subject: string;
   html: string;
   text: string;
-  attachments: { filename: string; size: number }[];
+  /** `id` is Resend's attachment id when known (links then resolve by id instead of by name) */
+  attachments: { filename: string; size: number; id?: string }[];
+  /** true once the attachment list is known to be complete (recorded at send, or looked up in Resend) */
+  attachmentsChecked?: boolean;
   scheduledAt: string | null;
   canceled?: boolean;
   sentAt: string;

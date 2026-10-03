@@ -190,6 +190,13 @@ Small capsules (20px, 11px/600). Every tag has an icon or plain-text meaning: Im
 ### Compose sheet
 Thick glass with a bounce when it materializes. It can be minimized to a 340px bar, maximized with a dimming scrim (a modal task), or shown full screen on phones. Recipients are chips, and invalid ones turn red as you type rather than on submit. Attachments show a running total against the 40 MB limit.
 
+### File previewer (Quick Look)
+Clicking any attachment (received, sent, or one you've just attached while writing) opens it in a full-window viewer modeled on macOS Quick Look. The page behind dims and blurs, and a glass toolbar shows the file badge, name, type, size, a **Download** button, *Open in new tab* and Close. ← / → move between the message's files and Esc closes.
+- **Shown directly:** images, PDF, video, audio, plain text and code (wrap toggle), JSON (pretty-printed), CSV/TSV (table), HTML (rendered *or* source), Word `.docx` (laid-out pages), Excel/ODS (one tab per sheet), and ZIP (list of contents).
+- **Everything else** (PowerPoint, programs, formats this browser can't decode) gets a **file card**: a large badge, the name, type and size, and a plain-language reason, with Download.
+- Documents sit on a white "paper" sheet in both themes, just like email bodies.
+- **Safety:** how a file is shown is decided by its name, never by what it claims to be. Bytes reach the browser as an opaque download, and HTML, Word and Excel render in sandboxed frames with scripts and remote loading blocked. Very large text is cut off at 2 MB, and tables at 2,000 rows.
+
 ### Sign-in
 Modeled on the macOS login window. A single thick-glass card sits on the brand canvas with the clinic logo above it.
 1. **Choose your mailbox.** Accounts are listed as rows (avatar · name · address). The one used last on this computer comes first, marked *Last used*.

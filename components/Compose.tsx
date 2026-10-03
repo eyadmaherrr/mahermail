@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import FilePreview, { localFile, remoteFile, type PreviewFile } from "./FilePreview";
 import Icon, { type IconName } from "./Icon";
 import RecipientField from "./RecipientField";
 import { EMAIL_RE, api, escapeHtml, fmtDate, fmtSize, splitAddresses } from "@/lib/client";
+import { fileType } from "@/lib/filetypes";
 import {
   MAX_ATTACHMENT_BYTES,
   type ComposeSeed, type Draft, type Field, type Recipients, type RemoteAttachment, type SendMeta, type Settings,
@@ -61,6 +63,7 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
   const [dragging, setDragging] = useState(false);
   const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
   const [customWhen, setCustomWhen] = useState("");
+  const [preview, setPreview] = useState<number | null>(null); // attachment open in the previewer
 
   const editorRef = useRef<HTMLDivElement>(null);
   const toRef = useRef<HTMLInputElement>(null);
@@ -239,6 +242,14 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
     listId: contactsId,
   });
 
+  // forwarded originals (on the server) first, then files picked on this computer — same order as the chips
+  const previewFiles: PreviewFile[] = [
+    ...remote.map((r) => remoteFile(`r-${r.id || r.filename}`, r.filename, r.size,
+      r.id ? `/api/files/${r.kind}/${encodeURIComponent(r.emailId)}?id=${encodeURIComponent(r.id)}`
+           : `/api/files/${r.kind}/${encodeURIComponent(r.emailId)}?name=${encodeURIComponent(r.filename)}`)),
+    ...files.map((a) => localFile(`l-${a.id}`, a.file)),
+  ];
+
   const keepSelection = (e: React.MouseEvent) => { if ((e.target as Element).closest("button")) e.preventDefault(); };
   const presetLabel = (d: Date) => d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
   const tomorrow = (h: number) => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(h, 0, 0, 0); return d; };
@@ -314,18 +325,18 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
 
           {(files.length > 0 || remote.length > 0) && (
             <div className="c-attachments">
-              {remote.map((r) => (
-                <div key={`r-${r.id}`} className="att-card" title="Forwarded from the original message">
-                  <span className="ext">{ext(r.filename)}</span>
+              {remote.map((r, i) => (
+                <div key={`r-${r.id || r.filename}`} className="att-card previewable" title={`Preview ${r.filename} (forwarded)`} onClick={() => setPreview(i)}>
+                  <span className="ext" data-type={fileType(r.filename)}>{ext(r.filename)}</span>
                   <span className="meta"><span>{r.filename}</span><small>{fmtSize(r.size)} · forwarded</small></span>
-                  <button className="icon-btn sm" title="Remove" onClick={() => setRemote((x) => x.filter((y) => y.id !== r.id))}><Icon name="x" /></button>
+                  <button className="icon-btn sm" title="Remove" onClick={(e) => { e.stopPropagation(); setRemote((x) => x.filter((y) => y !== r)); }}><Icon name="x" /></button>
                 </div>
               ))}
-              {files.map((a) => (
-                <div key={a.id} className="att-card">
-                  <span className="ext">{ext(a.file.name)}</span>
-                  <span className="meta"><span title={a.file.name}>{a.file.name}</span><small>{fmtSize(a.file.size)}</small></span>
-                  <button className="icon-btn sm" title="Remove" onClick={() => setFiles((f) => f.filter((x) => x.id !== a.id))}><Icon name="x" /></button>
+              {files.map((a, i) => (
+                <div key={a.id} className="att-card previewable" title={`Preview ${a.file.name}`} onClick={() => setPreview(remote.length + i)}>
+                  <span className="ext" data-type={fileType(a.file.name)}>{ext(a.file.name)}</span>
+                  <span className="meta"><span>{a.file.name}</span><small>{fmtSize(a.file.size)}</small></span>
+                  <button className="icon-btn sm" title="Remove" onClick={(e) => { e.stopPropagation(); setFiles((f) => f.filter((x) => x.id !== a.id)); }}><Icon name="x" /></button>
                 </div>
               ))}
             </div>
@@ -383,6 +394,10 @@ export default function Compose({ seed, initialHtml, settings, ownEmail, contact
         <input ref={fileInRef} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
         <input ref={imgInRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) insertImage(f); }} />
       </section>
+
+      {preview !== null && previewFiles[preview] && (
+        <FilePreview files={previewFiles} index={preview} onIndex={setPreview} onClose={() => setPreview(null)} />
+      )}
 
       {menu && (
         <div ref={menuRef} role="menu" className="menu glass-thick" style={{ left: menu.left, bottom: menu.bottom }}>

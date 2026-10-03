@@ -73,6 +73,7 @@ export const POST = authed(async (request, user) => {
         ...files.map((f) => ({ filename: f.name, size: f.size })),
         ...remote.map((r) => ({ filename: r.filename, size: r.size })),
       ],
+      attachmentsChecked: true, // we know exactly what was attached
       scheduledAt: meta.scheduledAt || null,
       sentAt: new Date().toISOString(),
     });
