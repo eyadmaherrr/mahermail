@@ -7,24 +7,27 @@ export const dynamic = "force-dynamic";
 
 export const GET = authed(async (_req, user) => {
   const local = await userDb(user).sent.list();
+  const userEmail = user.email.trim().toLowerCase();
 
-  // Fetch all sent messages from Resend so sent mail is never lost on serverless / Vercel
+  // Fetch sent messages from Resend belonging ONLY to this user's email address
   let remoteEmails: SentEmail[] = [];
   try {
-    const { data } = await resend().emails.list();
+    const { data } = await resend().emails.list({ limit: 100 });
     if (data?.data && Array.isArray(data.data)) {
-      remoteEmails = data.data.map((e) => ({
-        id: e.id,
-        to: Array.isArray(e.to) ? e.to : typeof e.to === "string" ? [e.to] : [],
-        cc: Array.isArray(e.cc) ? e.cc : typeof e.cc === "string" ? [e.cc] : [],
-        bcc: Array.isArray(e.bcc) ? e.bcc : typeof e.bcc === "string" ? [e.bcc] : [],
-        subject: e.subject || "(no subject)",
-        html: "",
-        text: "",
-        attachments: [],
-        scheduledAt: e.scheduled_at ?? null,
-        sentAt: e.created_at || new Date().toISOString(),
-      }));
+      remoteEmails = data.data
+        .filter((e) => e.from && e.from.toLowerCase().includes(userEmail))
+        .map((e) => ({
+          id: e.id,
+          to: Array.isArray(e.to) ? e.to : typeof e.to === "string" ? [e.to] : [],
+          cc: Array.isArray(e.cc) ? e.cc : typeof e.cc === "string" ? [e.cc] : [],
+          bcc: Array.isArray(e.bcc) ? e.bcc : typeof e.bcc === "string" ? [e.bcc] : [],
+          subject: e.subject || "(no subject)",
+          html: "",
+          text: "",
+          attachments: [],
+          scheduledAt: e.scheduled_at ?? null,
+          sentAt: e.created_at || new Date().toISOString(),
+        }));
     }
   } catch (err) {
     console.warn("[sent] Could not fetch remote sent emails:", (err as Error).message);
