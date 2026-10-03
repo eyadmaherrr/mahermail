@@ -1,7 +1,7 @@
 // Signed-cookie sessions. The cookie holds only the account id and an expiry, signed with
 // SESSION_SECRET, so it can't be forged or edited to become another mailbox.
 import { createHash, createHmac, timingSafeEqual } from "crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { findAccount, type Account } from "./accounts";
 
 const COOKIE = "mm_session";
@@ -38,8 +38,21 @@ function readToken(token: string | undefined): Account | null {
   }
 }
 
+/**
+ * The signed-in mailbox: from the session cookie (website), or from an
+ * `Authorization: Bearer <token>` header (the mobile app, which keeps its token in the device keychain).
+ */
 export async function currentUser(): Promise<Account | null> {
+  const auth = (await headers()).get("authorization");
+  if (auth?.toLowerCase().startsWith("bearer ")) return readToken(auth.slice(7).trim());
   return readToken((await cookies()).get(COOKIE)?.value);
+}
+
+/** A signed token for the app — the same format as the cookie, returned instead of being set. */
+export function createToken(account: Account, remember: boolean) {
+  const ttl = remember ? 30 * DAY : 12 * 60 * 60 * 1000;
+  const payload = Buffer.from(JSON.stringify({ u: account.id, exp: Date.now() + ttl })).toString("base64url");
+  return { token: `${payload}.${sign(payload)}`, expiresAt: new Date(Date.now() + ttl).toISOString() };
 }
 
 export async function startSession(account: Account, remember: boolean) {

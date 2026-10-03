@@ -1,5 +1,5 @@
 import { findAccount } from "@/lib/accounts";
-import { checkPassword, startSession } from "@/lib/session";
+import { checkPassword, createToken, startSession } from "@/lib/session";
 
 // Slow down password guessing: after 5 wrong tries a mailbox is locked for a minute.
 const MAX_TRIES = 5;
@@ -7,8 +7,8 @@ const LOCK_MS = 60_000;
 const failures = new Map<string, { count: number; lockedUntil: number }>();
 
 export async function POST(request: Request) {
-  const { account: id, password, remember } = (await request.json().catch(() => ({}))) as {
-    account?: string; password?: string; remember?: boolean;
+  const { account: id, password, remember, client } = (await request.json().catch(() => ({}))) as {
+    account?: string; password?: string; remember?: boolean; client?: string;
   };
   const account = findAccount(id);
   if (!account || typeof password !== "string") {
@@ -32,6 +32,10 @@ export async function POST(request: Request) {
   }
 
   failures.delete(account.id);
+  // the mobile app gets a token to keep in the device keychain instead of a cookie
+  if (client === "app") {
+    return Response.json({ ok: true, account, ...createToken(account, remember !== false) });
+  }
   await startSession(account, !!remember);
   // start the new session with a clean browser cache (nothing left over from the previous mailbox)
   return Response.json({ ok: true }, { headers: { "Clear-Site-Data": '"cache"' } });
